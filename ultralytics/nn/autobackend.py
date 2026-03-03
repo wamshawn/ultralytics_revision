@@ -121,6 +121,7 @@ class AutoBackend(nn.Module):
             paddle,
             ncnn,
             triton,
+            onnx_rknn,
         ) = self._model_type(w)
         fp16 &= pt or jit or onnx or xml or engine or nn_module or triton  # FP16
         nhwc = coreml or saved_model or pb or tflite or edgetpu  # BHWC formats (vs torch BCWH)
@@ -556,6 +557,10 @@ class AutoBackend(nn.Module):
         elif self.triton:
             im = im.cpu().numpy()  # torch to numpy
             y = self.model(im)
+
+        # RKNN(ONNX)
+        elif getattr(self, 'onnx_rknn', False):
+            assert "for inference, please refer to https://github.com/airockchip/rknn_model_zoo/"
 
         # TensorFlow (SavedModel, GraphDef, Lite, Edge TPU)
         else:
