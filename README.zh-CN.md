@@ -20,6 +20,10 @@
 </div>
 <br>
 
+增加导出`rknn`的`onnx`，使用`onnx_rknn`格式，支持`Detect`, `Segment`, `Obb` 和 `Pose`.
+
+<br>
+
 [Ultralytics](https://www.ultralytics.com/) [YOLO11](https://github.com/ultralytics/ultralytics) 是一个尖端的、最先进（SOTA）的模型，基于之前 YOLO 版本的成功，并引入了新功能和改进以进一步提升性能和灵活性。YOLO11 被设计得快速、准确且易于使用，是进行广泛对象检测和跟踪、实例分割、图像分类和姿态估计任务的理想选择。
 
 我们希望这里的资源能帮助你充分利用 YOLO。请浏览 Ultralytics <a href="https://docs.ultralytics.com/">文档</a> 以获取详细信息，在 <a href="https://github.com/ultralytics/ultralytics/issues/new/choose">GitHub</a> 上提出问题或讨论，成为 Ultralytics <a href="https://discord.com/invite/ultralytics">Discord</a>、<a href="https://reddit.com/r/ultralytics">Reddit</a> 和 <a href="https://community.ultralytics.com/">论坛</a> 的成员！
