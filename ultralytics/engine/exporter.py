@@ -404,6 +404,7 @@ class Exporter:
         # ts = torch.jit.trace(self.model, self.im, strict=False)
         # f = str(self.file).replace(self.file.suffix, f'_rknnopt.torchscript')
         # torch.jit.save(ts, str(f))
+        import onnx;
 
         f = str(self.file).replace(self.file.suffix, f'.onnx')
         opset_version = self.args.opset or get_latest_opset()
@@ -418,7 +419,30 @@ class Exporter:
 
         LOGGER.info(f'\n{prefix} feed {f} to RKNN-Toolkit or RKNN-Toolkit2 to generate RKNN model.\n' 
                     'Refer https://github.com/airockchip/rknn_model_zoo/tree/main/examples/')
-        return f, None
+        # Checks
+        load_external_data = self.args.load_external_data
+        if load_external_data is None:
+            load_external_data = False
+        model_onnx = onnx.load(f, load_external_data=load_external_data)  # load onnx model
+
+        # Simplify
+        if self.args.simplify:
+            try:
+                import onnxslim
+
+                LOGGER.info(f"{prefix} slimming with onnxslim {onnxslim.__version__}...")
+                model_onnx = onnxslim.slim(model_onnx)
+
+            except Exception as e:
+                LOGGER.warning(f"{prefix} simplifier failure: {e}")
+
+        # Metadata
+        for k, v in self.metadata.items():
+            meta = model_onnx.metadata_props.add()
+            meta.key, meta.value = k, str(v)
+
+        onnx.save(model_onnx, f)
+        return f, model_onnx
 
     @try_export
     def export_onnx(self, prefix=colorstr("ONNX:")):
