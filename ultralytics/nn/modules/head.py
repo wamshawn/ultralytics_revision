@@ -138,15 +138,32 @@ class Detect(nn.Module):
         """Concatenates and returns predicted bounding boxes and class probabilities."""
         if box_head is None or cls_head is None:  # for fused inference
             return dict()
+        
         bs = x[0].shape[0]  # batch size
         boxes = torch.cat([box_head[i](x[i]).view(bs, 4 * self.reg_max, -1) for i in range(self.nl)], dim=-1)
         scores = torch.cat([cls_head[i](x[i]).view(bs, self.nc, -1) for i in range(self.nl)], dim=-1)
         return dict(boxes=boxes, scores=scores, feats=x)
 
     def forward(
-        self, x: list[torch.Tensor]
+        self, x: list[torch.Tensor], task_type: str = "Detect"
     ) -> dict[str, torch.Tensor] | torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
         """Concatenates and returns predicted bounding boxes and class probabilities."""
+       
+        # Special handling for RKNN export - return raw outputs without post-processing
+        if task_type in ["Pose", "Obb"]:
+            y = []
+            for i in range(self.nl):
+                y.append(torch.cat((self.cv2[i](x[i]), self.cv3[i](x[i])), 1))
+            return y
+        
+        if self.export and self.format == "onnx_rknn":
+            y = []
+            for i in range(self.nl):
+                y.append(self.cv2[i](x[i]))  # reg: [1, 4*reg_max, H, W] - raw regression output
+                y.append(self.cv3[i](x[i]))  # cls: [1, nc, H, W] - raw classification output (no sigmoid)
+            return y
+       
+        
         preds = self.forward_head(x, **self.one2many)
         if self.end2end:
             x_detach = [xi.detach() for xi in x]
@@ -308,6 +325,21 @@ class Segment(Detect):
         outputs = super().forward(x)
         preds = outputs[1] if isinstance(outputs, tuple) else outputs
         proto = self.proto(x[0])  # mask protos
+
+        # Special handling for RKNN export - return raw outputs without post-processing
+        if self.export and self.format == "onnx_rknn":
+            if isinstance(outputs, list):
+                # outputs is raw list from Detect forward for rknn
+                bo = len(outputs) // 3  # boxes outputs per layer
+                mc = [self.cv4[i](x[i]) for i in range(self.nl)]
+                relocated = []
+                for i in range(self.nl):
+                    relocated.extend(outputs[i * bo : (i + 1) * bo])
+                    relocated.extend([mc[i]])
+                relocated.extend([proto] if not isinstance(proto, tuple) else list(proto))
+                return relocated
+            
+        
         if isinstance(preds, dict):  # training and validating during training
             if self.end2end:
                 preds["one2many"]["proto"] = proto
@@ -395,6 +427,21 @@ class Segment26(Segment):
         outputs = Detect.forward(self, x)
         preds = outputs[1] if isinstance(outputs, tuple) else outputs
         proto = self.proto(x)  # mask protos
+
+        # Special handling for RKNN export - return raw outputs without post-processing
+        if self.export and self.format == "onnx_rknn":
+            if isinstance(outputs, list):
+                # outputs is raw list from Detect forward for rknn
+                bo = len(outputs) // 3  # boxes outputs per layer
+                mc = [self.cv4[i](x[i]) for i in range(self.nl)]
+                relocated = []
+                for i in range(self.nl):
+                    relocated.extend(outputs[i * bo : (i + 1) * bo])
+                    relocated.extend([mc[i]])
+                relocated.extend([proto] if not isinstance(proto, tuple) else list(proto))
+                return relocated
+        
+
         if isinstance(preds, dict):  # training and validating during training
             if self.end2end:
                 preds["one2many"]["proto"] = proto
@@ -483,6 +530,19 @@ class OBB(Detect):
             angle = (angle.sigmoid() - 0.25) * math.pi  # [-pi/4, 3pi/4]
             preds["angle"] = angle
         return preds
+    
+    def forward(self, x: list[torch.Tensor]) -> dict[str, torch.Tensor] | torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Concatenates and returns predicted bounding boxes, class probabilities, and angles."""
+        
+        # Special handling for RKNN export - return raw outputs without post-processing
+        if self.export and self.format == "onnx_rknn":
+            x_out = Detect.forward(self, x, "Obb")
+            bs = x[0].shape[0]  # batch size
+            angle = torch.cat([self.cv4[i](x[i]).view(bs, self.ne, -1) for i in range(self.nl)], 2)  # OBB theta logits
+            return [x_out, angle.sigmoid()]
+        
+        # Normal forward pass
+        return super().forward(x)
 
     def decode_bboxes(self, bboxes: torch.Tensor, anchors: torch.Tensor) -> torch.Tensor:
         """Decode rotated bounding boxes."""
@@ -542,6 +602,19 @@ class OBB26(OBB):
             )  # OBB theta logits (raw output without sigmoid transformation)
             preds["angle"] = angle
         return preds
+    
+    def forward(self, x: list[torch.Tensor]) -> dict[str, torch.Tensor] | torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Concatenates and returns predicted bounding boxes, class probabilities, and angles."""
+        
+        # Special handling for RKNN export - return raw outputs without post-processing
+        if self.export and self.format == "onnx_rknn":
+            x_out = Detect.forward(self, x, "Obb")
+            bs = x[0].shape[0]  # batch size
+            angle = torch.cat([self.cv4[i](x[i]).view(bs, self.ne, -1) for i in range(self.nl)], 2)  # OBB theta logits
+            return [x_out, angle]
+        
+        # Normal forward pass
+        return super().forward(x)
 
 
 class Pose(Detect):
@@ -608,6 +681,25 @@ class Pose(Detect):
             bs = x[0].shape[0]  # batch size
             preds["kpts"] = torch.cat([pose_head[i](x[i]).view(bs, self.nk, -1) for i in range(self.nl)], 2)
         return preds
+    
+    def forward(self, x: list[torch.Tensor]) -> dict[str, torch.Tensor] | torch.Tensor | tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Perform forward pass through YOLO model and return predictions."""
+        # Special handling for RKNN export - return raw outputs without post-processing
+        if self.export and self.format == "onnx_rknn":
+            output_x = Detect.forward(self, x, "Pose")
+            y = []
+            y.append(output_x)
+            self.export = False
+            x_temp = Detect.forward(self, x)
+            self.export = True
+            bs = x[0].shape[0]
+            kpt = torch.cat([self.cv4[i](x[i]).view(bs, self.nk, -1) for i in range(self.nl)], -1)
+            pred_kpt = self.kpts_decode(kpt)
+            y.append(pred_kpt)
+            return y
+        
+        # Normal forward pass
+        return super().forward(x)
 
     def postprocess(self, preds: torch.Tensor) -> torch.Tensor:
         """Post-process YOLO model predictions.

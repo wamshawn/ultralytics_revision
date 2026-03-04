@@ -196,6 +196,7 @@ class AutoBackend(nn.Module):
             pte,
             axelera,
             triton,
+            onnx_rknn,
         ) = self._model_type("" if nn_module else model)
         fp16 &= pt or jit or onnx or xml or engine or nn_module or triton  # FP16
         nhwc = coreml or saved_model or pb or tflite or edgetpu or rknn  # BHWC formats (vs torch BCHW)
@@ -257,7 +258,7 @@ class AutoBackend(nn.Module):
             net = cv2.dnn.readNetFromONNX(w)
 
         # ONNX Runtime and IMX
-        elif onnx or imx:
+        elif onnx or imx or onnx_rknn:
             LOGGER.info(f"Loading {w} for ONNX Runtime inference...")
             check_requirements(("onnx", "onnxruntime-gpu" if cuda else "onnxruntime"))
             import onnxruntime
@@ -276,7 +277,7 @@ class AutoBackend(nn.Module):
             LOGGER.info(
                 f"Using ONNX Runtime {onnxruntime.__version__} with {providers[0] if isinstance(providers[0], str) else providers[0][0]}"
             )
-            if onnx:
+            if onnx or onnx_rknn:
                 session = onnxruntime.InferenceSession(w, providers=providers)
             else:
                 check_requirements(("model-compression-toolkit>=2.4.1", "edge-mdt-cl<1.1.0", "onnxruntime-extensions"))
