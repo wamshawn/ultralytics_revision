@@ -394,7 +394,8 @@ class Exporter:
         # ts = torch.jit.trace(self.model, self.im, strict=False)
         # f = str(self.file).replace(self.file.suffix, f'_rknnopt.torchscript')
         # torch.jit.save(ts, str(f))
-
+        import onnx  # noqa
+        
         f = str(self.file).replace(self.file.suffix, f'.onnx')
         opset_version = self.args.opset or get_latest_opset()
         torch.onnx.export(
@@ -408,7 +409,37 @@ class Exporter:
 
         LOGGER.info(f'\n{prefix} feed {f} to RKNN-Toolkit or RKNN-Toolkit2 to generate RKNN model.\n' 
                     'Refer https://github.com/airockchip/rknn_model_zoo/tree/main/models/CV/object_detection/yolo')
-        return f, None
+        
+        load_external_data = self.args.load_external_data
+        if load_external_data is None:
+            load_external_data = False
+        # Checks
+        model_onnx = onnx.load(f, load_external_data=load_external_data)  # load onnx model
+        # onnx.checker.check_model(model_onnx)  # check onnx model
+
+        # Simplify
+        if self.args.simplify:
+            try:
+                import onnxslim
+
+                LOGGER.info(f"{prefix} slimming with onnxslim {onnxslim.__version__}...")
+                model_onnx = onnxslim.slim(model_onnx)
+
+                # ONNX Simplifier (deprecated as must be compiled with 'cmake' in aarch64 and Conda CI environments)
+                # import onnxsim
+                # model_onnx, check = onnxsim.simplify(model_onnx)
+                # assert check, "Simplified ONNX model could not be validated"
+            except Exception as e:
+                LOGGER.warning(f"{prefix} simplifier failure: {e}")
+
+        # Metadata
+        for k, v in self.metadata.items():
+            meta = model_onnx.metadata_props.add()
+            meta.key, meta.value = k, str(v)
+
+        onnx.save(model_onnx, f)
+        return f, model_onnx
+        # return f, None
     
     @try_export
     def export_onnx(self, prefix=colorstr("ONNX:")):
@@ -445,8 +476,11 @@ class Exporter:
             dynamic_axes=dynamic or None,
         )
 
+        load_external_data = self.args.load_external_data
+        if load_external_data is None:
+            load_external_data = False
         # Checks
-        model_onnx = onnx.load(f)  # load onnx model
+        model_onnx = onnx.load(f, load_external_data=load_external_data)  # load onnx model
         # onnx.checker.check_model(model_onnx)  # check onnx model
 
         # Simplify
